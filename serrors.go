@@ -1,21 +1,39 @@
 package serrors
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
-
-	"go.opentelemetry.io/otel/trace"
 )
+
+type ErrAttr int
+
+const (
+	Cause ErrAttr = iota
+	Operation
+)
+
+var errAttrStrings = [...]string{
+	"cause",
+	"op",
+}
+
+func (e ErrAttr) String() string {
+	if e < 0 || int(e) > e.Size() {
+		return fmt.Sprintf("unknown ErrAttr(%d)", e)
+	}
+	return errAttrStrings[e]
+}
+
+func (e ErrAttr) Size() int {
+	return len(errAttrStrings)
+}
 
 // StructuredError represents a structured, optionally correlated error.
 type StructuredError struct {
-	Msg     string
-	Op      string
-	Err     error
-	Fields  map[string]any
-	TraceID string // Optional OTEL trace ID
-	SpanID  string // Optional OTEL span ID
+	Msg    string
+	Op     string
+	Err    error
+	Fields []slog.Attr
 }
 
 func (e *StructuredError) Error() string {
@@ -30,39 +48,23 @@ func (e *StructuredError) Unwrap() error {
 }
 
 func (e *StructuredError) LogValue() slog.Value {
-	attrs := make([]slog.Attr, 0, len(e.Fields)+3)
+	attrs := make([]slog.Attr, 0)
+	attrs = append(attrs, e.Fields...)
+	attrs = append(attrs, slog.String(Operation.String(), e.Op))
 
-	for k, v := range e.Fields {
-		attrs = append(attrs, slog.Any(k, v))
-	}
-	attrs = append(attrs, slog.String("op", e.Op))
 	if e.Err != nil {
-		attrs = append(attrs, slog.String("cause", e.Err.Error()))
-	}
-	if e.TraceID != "" {
-		attrs = append(attrs, slog.String("trace_id", e.TraceID))
-	}
-	if e.SpanID != "" {
-		attrs = append(attrs, slog.String("span_id", e.SpanID))
+		attrs = append(attrs, slog.String(Cause.String(), e.Err.Error()))
 	}
 
 	return slog.GroupValue(attrs...)
 }
 
 // New creates a StructuredError with optional span correlation.
-func New(ctx context.Context, op, msg string, err error, fields map[string]any) error {
-	se := &StructuredError{
+func New(op, msg string, err error, fields ...slog.Attr) error {
+	return &StructuredError{
 		Msg:    msg,
 		Op:     op,
 		Err:    err,
 		Fields: fields,
 	}
-
-	if span := trace.SpanFromContext(ctx); span != nil && span.SpanContext().IsValid() {
-		sc := span.SpanContext()
-		se.TraceID = sc.TraceID().String()
-		se.SpanID = sc.SpanID().String()
-	}
-
-	return se
 }
